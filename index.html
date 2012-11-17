@@ -1,0 +1,10 @@
+<script src='public/easel.js'></script>
+<script src='jam/require.js'></script>
+
+<canvas id='playingfield' width=640 height=358></canvas>
+
+<script>
+  require(['public/xpong'], function(xpong) {
+    xpong.start()
+  });
+</script>
