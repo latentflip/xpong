@@ -4,8 +4,8 @@
     __extends = function(child, parent) { for (var key in parent) { if (__hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
     __bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; };
 
-  define(['underscore', 'jquery', './socket'], function(_, $, socket) {
-    var Ball, BallGraphic, Game, Graphics, Physics, Player, PlayerGraphic, Shape, Stage, Ticker, Vector, canvas, config, player, stage, start;
+  define(['underscore', 'jquery', './socket', './line', './vector', './physics'], function(_, $, socket, Line, Vector, Physics) {
+    var Ball, BallGraphic, Game, Graphics, Player, PlayerGraphic, Shape, Stage, Ticker, canvas, config, player, stage, start;
     Stage = createjs.Stage;
     Graphics = createjs.Graphics;
     Shape = createjs.Shape;
@@ -19,87 +19,32 @@
     canvas.height(config.height);
     stage = new createjs.Stage(canvas[0]);
     player = null;
-    Vector = {
-      dotProduct: function(v1, v2) {
-        return v1[0] * v2[0] + v1[1] * v2[1];
-      },
-      scale: function(s, v) {
-        return [v[0] * s, v[1] * s];
-      },
-      length: function(v) {
-        return Math.pow(v[0] * v[0] + v[1] * v[1], 0.5);
-      },
-      add: function(v1, v2) {
-        return [v1[0] + v2[0], v1[1] + v2[1]];
-      },
-      subtract: function(v1, v2) {
-        return [v1[0] - v2[0], v1[1] - v2[1]];
-      },
-      normalize: function(v) {
-        var l;
-        l = this.length(v);
-        return [v[0] / l, v[1] / l];
-      },
-      reflect: function(v, n) {
-        return this.subtract(v, this.scale(2 * this.dotProduct(v, n), n));
-      }
-    };
-    Physics = {
-      circleCollisionNormal: function(c1, c2) {
-        return Vector.normalize(Vector.subtract(c2.position, c1.position));
-      },
-      separation: function(p1, p2) {
-        return Math.pow(Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2), 0.5);
-      },
-      testCircleCircleCollision: function(c1, c2) {
-        var radiusSum, separation;
-        separation = this.separation(c1.position, c2.position);
-        radiusSum = c1.radius + c2.radius;
-        return separation <= radiusSum;
-      },
-      collideBallWithPlayer: function(ball, player) {
-        var normal, overlapDistance, overlapVector, radiusSum;
-        overlapVector = Vector.subtract(player.position, ball.position);
-        radiusSum = ball.radius + player.radius;
-        overlapDistance = Vector.length(overlapVector) - radiusSum;
-        if (overlapDistance <= 0) {
-          normal = Vector.normalize(overlapVector);
-          ball.velocity = Vector.reflect(ball.velocity, normal);
-          return ball.position = Vector.add(ball.position, Vector.scale(overlapDistance, normal));
-        }
-      },
-      collideBallWithEdges: function(ball) {
-        var r, x, y;
-        x = ball.position[0];
-        y = ball.position[1];
-        r = ball.radius;
-        if (x <= r) {
-          return ball.velocity = Vector.reflect(ball.velocity, [1, 0]);
-        } else if (x >= config.width - ball.radius) {
-          return ball.velocity = Vector.reflect(ball.velocity, [-1, 0]);
-        } else if (y <= r) {
-          return ball.velocity = Vector.reflect(ball.velocity, [0, 1]);
-        } else if (y >= config.height - ball.radius) {
-          return ball.velocity = Vector.reflect(ball.velocity, [0, -1]);
-        }
-      }
-    };
+    window.stage = stage;
     Ball = (function() {
+
+      Ball.prototype.friction = 0;
 
       Ball.prototype.radius = 5;
 
       function Ball() {
         this.position = [config.width / 2, config.height / 2];
         this.graphic = new BallGraphic(this);
-        this.velocity = [0.05, 0.05];
+        this.velocity = [0.1, 0.1];
       }
 
       Ball.prototype.updatePosition = function(delta) {
-        this.position[0] += this.velocity[0] * delta;
-        return this.position[1] += this.velocity[1] * delta;
+        if (delta) {
+          this.position[0] += this.velocity[0] * delta;
+          return this.position[1] += this.velocity[1] * delta;
+        }
+      };
+
+      Ball.prototype.updateVelocity = function(delta) {
+        return this.velocity = Vector.scale(1 - this.friction, this.velocity);
       };
 
       Ball.prototype.render = function(delta) {
+        this.updateVelocity(delta);
         this.updatePosition(delta);
         return this.graphic.render(delta);
       };
@@ -114,6 +59,7 @@
       function Player(id) {
         var _this = this;
         this.position = [250, 250];
+        this.velocity = [0, 0];
         this.graphic = new PlayerGraphic(this);
         this.playerId = id;
         socket.on("player:" + this.playerId + ":move", function(pos) {
@@ -121,12 +67,38 @@
         });
       }
 
+      Player.prototype.hitSpacing = 10;
+
+      Player.prototype.nextHit = 0;
+
       Player.prototype.updatePosition = function(p) {
         return this.position = Vector.add(this.position, [config.width * p[0], config.height * p[1]]);
       };
 
-      Player.prototype.render = function() {
-        return this.graphic.render();
+      Player.prototype.updateVelocity = function(delta) {
+        var pdelta;
+        if (!this.lastPosition) {
+          this.lastPosition = this.position;
+          return this.velocity = [0, 0];
+        } else {
+          pdelta = Vector.subtract(this.position, this.lastPosition);
+          this.velocity = Vector.scale(1 / delta, pdelta);
+          return this.lastPosition = this.position;
+        }
+      };
+
+      Player.prototype.onCollision = function() {
+        return this.nextHit = this.hitSpacing;
+      };
+
+      Player.prototype.updateNextHit = function() {
+        return this.nextHit--;
+      };
+
+      Player.prototype.render = function(delta) {
+        this.updateVelocity(delta);
+        this.graphic.render();
+        return this.updateNextHit();
       };
 
       return Player;
@@ -139,8 +111,8 @@
       function PlayerGraphic(player) {
         this.player = player;
         this.g = new Graphics();
-        this.g.beginStroke(Graphics.getRGB(0, 0, 0));
-        this.g.drawCircle(0, 0, this.player.radius);
+        this.g.beginStroke(Graphics.getRGB.apply(Graphics, this.color));
+        this.g.drawCircle(-1 * this.player.radius / 2, -1 * this.player.radius / 2, this.player.radius);
         this.circle = new Shape(this.g);
         this.circle.x = this.getX();
         this.circle.y = this.getY();
@@ -185,6 +157,7 @@
         this.tick = __bind(this.tick, this);
         this.players = [];
         this.addBall();
+        this.addLines();
       }
 
       Game.prototype.addPlayer = function(id) {
@@ -195,19 +168,46 @@
         return this.ball = new Ball();
       };
 
+      Game.prototype.addLines = function() {
+        var colors, i, points, _i, _ref, _results,
+          _this = this;
+        points = [[0, 200], [400, 100], [500, 200], [400, 400], [100, 400], [0, 200]];
+        colors = [[0, 250, 0], [250, 0, 0], [250, 250, 0], [0, 0, 250], [0, 250, 250], [0, 0, 0]];
+        this.lines || (this.lines = []);
+        _results = [];
+        for (i = _i = 0, _ref = points.length - 1; 0 <= _ref ? _i < _ref : _i > _ref; i = 0 <= _ref ? ++_i : --_i) {
+          _results.push((function(i) {
+            return _this.lines.push(new Line(points[i], points[i + 1], colors[i]));
+          })(i));
+        }
+        return _results;
+      };
+
       Game.prototype.tick = function(delta) {
-        var p, _i, _j, _len, _len1, _ref, _ref1;
+        var l, line, p, _i, _j, _k, _l, _len, _len1, _len2, _len3, _ref, _ref1, _ref2, _ref3;
+        if (!delta) {
+          _ref = this.lines;
+          for (_i = 0, _len = _ref.length; _i < _len; _i++) {
+            line = _ref[_i];
+            line.render(stage);
+          }
+        }
         delta || (delta = 0);
         this.ball.render(delta);
-        _ref = this.players;
-        for (_i = 0, _len = _ref.length; _i < _len; _i++) {
-          p = _ref[_i];
-          Physics.collideBallWithPlayer(this.ball, p);
-        }
-        Physics.collideBallWithEdges(this.ball);
         _ref1 = this.players;
         for (_j = 0, _len1 = _ref1.length; _j < _len1; _j++) {
           p = _ref1[_j];
+          Physics.collideBallWithPlayer(this.ball, p);
+        }
+        Physics.collideBallWithEdges(this.ball);
+        _ref2 = this.lines;
+        for (_k = 0, _len2 = _ref2.length; _k < _len2; _k++) {
+          l = _ref2[_k];
+          Physics.collideBallWithLine(this.ball, l);
+        }
+        _ref3 = this.players;
+        for (_l = 0, _len3 = _ref3.length; _l < _len3; _l++) {
+          p = _ref3[_l];
           p.render(delta);
         }
         this.ball.render();
@@ -232,6 +232,7 @@
       socket.emit('gamespace:register', '');
       return socket.on('gamespace:register:ack', function() {
         var game;
+        console.log('Start game');
         game = new Game();
         return game.start();
       });
